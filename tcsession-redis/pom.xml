@@ -5,11 +5,11 @@
   <parent>
     <groupId>com.tc</groupId>
     <artifactId>tcsession</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>2.0.0-SNAPSHOT</version>
   </parent>
   <groupId>com.tc</groupId>
   <artifactId>tcsession-redis</artifactId>
-  <version>1.1-SNAPSHOT</version>
+  <version>2.0.0-SNAPSHOT</version>
   <name>tcsession-redis</name>
   <url>http://maven.apache.org</url>
   <properties>
@@ -22,10 +22,85 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <version>4.8.2</version>
-      <scope>test</scope>
+      <groupId>redis.clients</groupId>
+      <artifactId>jedis</artifactId>
     </dependency>
   </dependencies>
+
+  <profiles>
+    <profile>
+      <id>wout_trinity</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <build>
+        <finalName>tcsession-redis-without-trinity-${project.version}</finalName>
+        <resources>
+          <resource>
+            <directory>${basedir}/src/main/config</directory>
+            <excludes>
+              <exclude>**/com.tc.trinity.core.spi.Configurable</exclude>
+            </excludes>
+          </resource>
+        </resources>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-eclipse-plugin</artifactId>
+            <version>2.9</version>
+            <configuration>
+              <sourceExcludes>
+                <sourceExclude>**/RedisSessionConfiguration.java</sourceExclude>
+              </sourceExcludes>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+              <source>1.7</source>
+              <target>1.7</target>
+            </configuration>
+            <executions>
+              <execution>
+                <id>default-compile</id>
+                <phase>compile</phase>
+                <goals>
+                  <goal>compile</goal>
+                </goals>
+                <configuration>
+                  <excludes>
+                    <exclude>**/RedisSessionConfiguration.java</exclude>
+                  </excludes>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>with_trinity</id>
+      <activation>
+        <property>
+          <name>with_trinity</name>
+        </property>
+      </activation>
+      <build>
+        <resources>
+          <resource>
+            <directory>${basedir}/src/main/resources</directory>
+          </resource>
+        </resources>
+      </build>
+      <dependencies>
+        <dependency>
+          <groupId>com.tc.mw</groupId>
+          <artifactId>trinity</artifactId>
+          <version>${trinity.version}</version>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
+
 </project>

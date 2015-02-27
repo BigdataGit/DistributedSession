@@ -1,17 +1,17 @@
 
 package com.tc.session;
 
+import static com.tc.session.RequestCache.PLACEHOLDER;
+
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.WeakHashMap;
 
 import javax.servlet.ServletContext;
-import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpSessionBindingEvent;
 import javax.servlet.http.HttpSessionBindingListener;
@@ -32,84 +32,104 @@ import org.slf4j.LoggerFactory;
 @SuppressWarnings("deprecation")
 public class TCSession implements HttpSession {
     
-    private static final Logger log = LoggerFactory.getLogger(TCSession.class);
+    private static final Logger logger = LoggerFactory.getLogger(TCSession.class);
     
-    /** Session管理器 */
-    private SessionManager sessionManager;
-    /** Session ID */
-    private String id;
-    /** Session创建时间 */
-    private long createTime;
-    /** Session最后一次访问时间 */
-    private long lastAccessTime;
-    /** Session的最大空闲时间间隔 */
-    private int maxInactiveInterval;
-    /** 是否是新建Session */
+    private SessionClient sessionClient;
+    
+    private ServletContext servletContext;
+    
+    private SessionMetaData metadata;
+    
     private boolean isNew;
     
-    private HttpServletRequest request;
-    
-    private WeakHashMap<HttpServletRequest, Map<String, Object>> cache;
-    
-    private static final String NULL_VALUE = "__NULL_";
+    private RequestCache cache;
     
     /**
      * 构造方法,指定ID
      * 
-     * @param sessionManager
+     * @param sessionClient
      * @param id
      */
-    public TCSession(SessionManager sessionManager, String id, HttpServletRequest request) {
+    public TCSession(SessionClient sessionClient, SessionMetaData metadata, boolean isNew) {
     
-        this.sessionManager = sessionManager;
-        this.createTime = System.currentTimeMillis();
-        this.lastAccessTime = this.createTime;
-        this.isNew = true;
-        this.request = request;
-        cache = new WeakHashMap<HttpServletRequest, Map<String, Object>>();
-        this.id = id;
+        this.sessionClient = sessionClient;
+        this.metadata = metadata;
+        this.isNew = isNew;
+        this.cache = RequestCache.getFromThread();
+    }
+    
+    public TCSession(SessionClient sessionClient, String id) {
+    
+        this.sessionClient = sessionClient;
+        this.metadata = new SessionMetaData();
+        this.metadata.setId(id);
+        this.cache = RequestCache.getFromThread();
+    }
+    
+    public SessionMetaData getSessionMetadata() {
+    
+        return this.metadata;
     }
     
     @Override
     public long getCreationTime() {
     
-        return createTime;
+        return metadata.getCreationTime();
     }
     
     @Override
     public String getId() {
     
-        return id;
+        return metadata.getId();
     }
     
     @Override
     public long getLastAccessedTime() {
     
-        return lastAccessTime;
+        return metadata.getLastAccessedTime();
+    }
+    
+    public void setServletContext(ServletContext servletContext) {
+    
+        this.servletContext = servletContext;
     }
     
     @Override
     public ServletContext getServletContext() {
     
-        return sessionManager.getServletContext();
+        return this.servletContext;
     }
     
     @Override
     public void setMaxInactiveInterval(int interval) {
     
-        this.maxInactiveInterval = interval;
+        this.metadata.setMaxInactiveInterval(interval);
     }
     
     @Override
     public int getMaxInactiveInterval() {
     
-        return maxInactiveInterval;
+        return this.metadata.getMaxInactiveInterval();
     }
     
     @Override
     public HttpSessionContext getSessionContext() {
     
-        return null;
+        // I don't have a fucking idea with this fucking method
+        // so, just copy the following snippet from Jetty's implementation.
+        return new HttpSessionContext() {
+            
+            public HttpSession getSession(String sessionId) {
+            
+                return null;
+            }
+            
+            @SuppressWarnings({ "rawtypes", "unchecked" })
+            public Enumeration getIds() {
+            
+                return Collections.enumeration(Collections.EMPTY_LIST);
+            }
+        };
     }
     
     @Override
@@ -128,11 +148,6 @@ public class TCSession implements HttpSession {
     public void removeValue(String name) {
     
         removeAttribute(name);
-    }
-    
-    public void setRequest(HttpServletRequest request) {
-    
-        this.request = request;
     }
     
     @SuppressWarnings("rawtypes")
@@ -159,7 +174,7 @@ public class TCSession implements HttpSession {
     public void access() {
     
         this.isNew = false;
-        this.lastAccessTime = System.currentTimeMillis();
+        this.metadata.setLastAccessedTime(System.currentTimeMillis());
     }
     
     /**
@@ -170,7 +185,7 @@ public class TCSession implements HttpSession {
     protected void fireHttpSessionBindEvent(String name, Object value) {
     
         // 处理Session的监听器
-        if (value instanceof HttpSessionBindingListener) {
+        if (value != null && value instanceof HttpSessionBindingListener) {
             HttpSessionBindingEvent event = new HttpSessionBindingEvent(this, name, value);
             ((HttpSessionBindingListener) value).valueBound(event);
         }
@@ -184,7 +199,7 @@ public class TCSession implements HttpSession {
     protected void fireHttpSessionUnbindEvent(String name, Object value) {
     
         // 处理Session的监听器
-        if (value instanceof HttpSessionBindingListener) {
+        if (value != null && value instanceof HttpSessionBindingListener) {
             HttpSessionBindingEvent event = new HttpSessionBindingEvent(this, name, value);
             ((HttpSessionBindingListener) value).valueUnbound(event);
         }
@@ -192,55 +207,47 @@ public class TCSession implements HttpSession {
     
     public boolean isValid() {
     
-        return lastAccessTime + maxInactiveInterval > System.currentTimeMillis();
+        return getLastAccessedTime() + getMaxInactiveInterval() > System.currentTimeMillis();
     }
     
     @Override
     public Object getAttribute(String name) {
     
-        access();
-        Map<String, Object> rCache = cache.get(request);
-        if (rCache != null) {
-            Object v = rCache.get(this.id + "_" + name);
-            if (v != null) {
-                return NULL_VALUE.equals(v.toString()) ? null : v;
-            }
-        } else {
-            rCache = new HashMap<String, Object>();
-            cache.put(request, rCache);
+        if (name == null) {
+            throw new IllegalArgumentException("attribute name cannot be null");
         }
         
-        // 获取session ID
-        String sessionId = getId();
-        if (StringUtils.isNotBlank(sessionId)) {
-            // 返回Session节点下的数据
-            SessionClient client = sessionManager.getSessionClient();
-            Object o = client.getAttribute(sessionId, name);
-            rCache.put(sessionId + "_" + name, o == null ? NULL_VALUE : o);
-            return o;
-            
+        access();
+        Object v = cache.get(getId() + "_" + name);
+        if (v != null) {
+            return v == PLACEHOLDER ? null : v;
+        } else {
+            try {
+                Object o = sessionClient.getAttribute(getId(), name);
+                cache.put(this.metadata.getId() + "_" + name, o == null ? PLACEHOLDER : o);
+                return o;
+            } catch (Exception ex) {
+                logger.error(String.format("==========> Error occurs when getting attribute: [%s] from session: [%s]", name, this), ex);
+                return null;
+            }
         }
-        rCache.put(this.id + "_" + name, NULL_VALUE);
-        return null;
     }
     
-    @SuppressWarnings("rawtypes")
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     @Override
     public Enumeration getAttributeNames() {
     
         access();
-        // 获取session ID
-        String sessionId = getId();
-        if (StringUtils.isNotBlank(sessionId)) {
+        String id = getId();
+        if (StringUtils.isNotBlank(id)) {
             // 返回Session节点下的数据名字
             try {
-                SessionClient client = sessionManager.getSessionClient();
-                List<String> names = client.getAttributeNames(sessionId);
+                List<String> names = sessionClient.getAttributeNames(id);
                 if (names != null) {
                     return Collections.enumeration(names);
                 }
             } catch (Exception ex) {
-                log.error("调用getAttributeNames方法时发生异常，", ex);
+                logger.error("==========> Error occurs when calling getAttributeNames from session: " + this, ex);
             }
         }
         return null;
@@ -249,78 +256,155 @@ public class TCSession implements HttpSession {
     @Override
     public void setAttribute(String name, Object value) {
     
-        // 没有实现序列化接口的直接返回
-        if (!(value instanceof Serializable)) {
-            log.warn("对象[" + value + "]没有实现Serializable接口，无法保存到分布式Session中");
-            return;
+        if (name == null) {
+            throw new IllegalArgumentException("attribute name cannot be null");
         }
+        
+        if (value == null) {
+            removeAttribute(name);
+        } else if (!(value instanceof Serializable)) {
+            logger.warn(String.format("==========> Error in setting attribute [key: %s] - [value: %s] ", name, value));
+            throw new IllegalArgumentException("The attribute of TCSession MUST implement Serializable!");
+        }
+        
         access();
-        // 获取session ID
-        String sessionId = getId();
-        if (StringUtils.isNotBlank(sessionId)) {
-            // 将数据添加到ZooKeeper服务器上
-            SessionClient client = sessionManager.getSessionClient();
-            client.setAttribute(sessionId, name, (Serializable) value);
+        try {
+            sessionClient.setAttribute(getId(), name, (Serializable) value);
+            cache.put(getId() + "_" + name, value);
+        } catch (Exception ex) {
+            logger.error(String.format("==========> Error occurs when setting attribute: [%s] of session: [%s]", name, this), ex);
         }
-        clearCache(name);
-        // 处理Session的监听器
         fireHttpSessionBindEvent(name, value);
     }
     
     @Override
     public void removeAttribute(String name) {
     
+        if (name == null) {
+            throw new IllegalArgumentException("attribute name cannot be null");
+        }
+        
         access();
         Object value = null;
-        // 获取session ID
-        String sessionId = getId();
-        if (StringUtils.isNotBlank(sessionId)) {
-            // 删除Session节点下的数据
-            SessionClient client = sessionManager.getSessionClient();
-            client.removeAttribute(sessionId, name);
-            this.request.setAttribute(this.id + "_" + name, NULL_VALUE);
-        }
-        clearCache(name);
-        // 处理Session的监听器
-        fireHttpSessionUnbindEvent(name, value);
-    }
-    
-    private void clearCache(String attrName){
-        Map<String, Object> rCache = cache.get(request);
-        if (rCache != null) {
-            Object v = rCache.remove(this.id + "_" + attrName);
-            if (v != null) {
-                log.debug("remove object from cache successfully. attrName: " + attrName);
+        String id = getId();
+        if (StringUtils.isNotBlank(id)) {
+            try {
+                sessionClient.removeAttribute(id, name);
+                cache.put(getId() + "_" + name, PLACEHOLDER);
+            } catch (Exception ex) {
+                logger.error(String.format("==========> Error occurs when removing attribute: [%s] from session: [%s]", name, this), ex);
             }
         }
+        fireHttpSessionUnbindEvent(name, value);
     }
     
     @Override
     public void invalidate() {
     
-        // 获取session ID
-        String sessionId = getId();
-        if (StringUtils.isNotBlank(sessionId)) {
-            // 删除Session节点
+        String id = getId();
+        if (StringUtils.isNotBlank(id)) {
             try {
-                SessionClient client = sessionManager.getSessionClient();
-                Map<String, Object> sessionMap = client.removeSession(sessionId);
+                Map<String, Object> sessionMap = sessionClient.removeSession(id);
                 if (sessionMap != null && sessionMap.size() > 0) {
-                    for(Map.Entry<String, Object> entry : sessionMap.entrySet()){
-                        String key = entry.getKey();
-                        Object value = entry.getValue();
-                        fireHttpSessionUnbindEvent(key, value);
+                    for (Map.Entry<String, Object> entry : sessionMap.entrySet()) {
+                        fireHttpSessionUnbindEvent(entry.getKey(), entry.getValue());
                     }
                 }
-                if(log.isInfoEnabled()){
-                    log.info("Invalidate session: " + sessionId + " successfully");
-                }
             } catch (Exception ex) {
-                log.error("调用invalidate方法时发生异常，", ex);
+                logger.error("==========> Error occurs when invalidating session: " + this, ex);
             }
         }
-        // 删除本地容器中的Session对象
-        sessionManager.removeHttpSession(this);
+    }
+    
+    @Override
+    public String toString() {
+    
+        return "TCSession [id=" + getId() + ", createTime=" + getCreationTime() + ", lastAccessTime=" + getLastAccessedTime() + ", maxInactiveInterval=" + getMaxInactiveInterval() + ", isNew=" + isNew + "]";
+    }
+    
+    public static class SessionMetaData implements Serializable {
+        
+        private static final long serialVersionUID = -6446174402446690125L;
+        
+        private String id;
+        
+        /** session的创建时间 */
+        private Long creationTime;
+        
+        /** session的最大空闲时间 */
+        private int maxInactiveInterval;
+        
+        /** session的最后一次访问时间 */
+        private Long lastAccessedTime;
+        /** 当前版本 */
+        private int version = 0;
+        
+        public SessionMetaData() {
+        
+            this.creationTime = System.currentTimeMillis();
+            this.lastAccessedTime = this.creationTime;
+        }
+        
+        public Long getCreationTime() {
+        
+            return creationTime;
+        }
+        
+        public void setCreationTime(Long creationTime) {
+        
+            this.creationTime = creationTime;
+        }
+        
+        public int getMaxInactiveInterval() {
+        
+            return maxInactiveInterval;
+        }
+        
+        public void setMaxInactiveInterval(int maxInactiveInterval) {
+        
+            this.maxInactiveInterval = maxInactiveInterval;
+        }
+        
+        public Long getLastAccessedTime() {
+        
+            return lastAccessedTime;
+        }
+        
+        public void setLastAccessedTime(Long lastAccessedTime) {
+        
+            this.lastAccessedTime = lastAccessedTime;
+        }
+        
+        public Boolean isValid() {
+        
+            return (getLastAccessedTime() + getMaxInactiveInterval()) > System.currentTimeMillis();
+        }
+        
+        public String getId() {
+        
+            return id;
+        }
+        
+        public void setId(String id) {
+        
+            this.id = id;
+        }
+        
+        public int getVersion() {
+        
+            return version;
+        }
+        
+        public void setVersion(int version) {
+        
+            this.version = version;
+        }
+        
+        @Override
+        public String toString() {
+        
+            return "SessionMetaData [id=" + id + ", createTime=" + new Date(creationTime) + ", maxIdle=" + maxInactiveInterval + ", lastAccessTime=" + new Date(lastAccessedTime) + ", version=" + version + "]";
+        }
     }
     
 }

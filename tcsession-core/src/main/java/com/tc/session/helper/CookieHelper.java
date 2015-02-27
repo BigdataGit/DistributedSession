@@ -6,22 +6,22 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 
  * Cookie读写
- * 
+ *
  * @author gaofeng
  * @date Sep 12, 2013 3:29:50 PM
  * @id $Id$
  */
-public final class CookieHelper {
+public class CookieHelper {
     
     private static final String TC_SESSION_ID = "tsid";
     
-    private CookieHelper() {
-    
-    }
+    protected static Logger log = LoggerFactory.getLogger(CookieHelper.class);
     
     /**
      * 将Session ID写到客户端的Cookie中
@@ -40,11 +40,9 @@ public final class CookieHelper {
             cookie = new Cookie(TC_SESSION_ID, id);
         }
         cookie.setValue(id);
-        //只有expiry大于0，才需要设置过期时间
-        if (expiry > 0) {
-            cookie.setMaxAge(expiry);
-        }
+        cookie.setMaxAge(expiry);
         cookie.setPath(StringUtils.isEmpty(request.getContextPath()) ? "/" : request.getContextPath());
+        cookie.setHttpOnly(true); // to protect from XSS attack!
         response.addCookie(cookie);
         return cookie;
     }

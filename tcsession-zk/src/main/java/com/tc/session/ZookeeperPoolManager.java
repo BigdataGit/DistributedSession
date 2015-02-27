@@ -3,6 +3,7 @@ package com.tc.session;
 
 import java.util.NoSuchElementException;
 
+import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.commons.pool.ObjectPool;
 import org.apache.commons.pool.PoolableObjectFactory;
 import org.apache.commons.pool.impl.StackObjectPool;
@@ -16,12 +17,12 @@ import org.slf4j.LoggerFactory;
  * @author gaofeng
  * @date 2013-5-24
  */
-public final class ZookeeperPoolManager {
+public class ZookeeperPoolManager {
     
     private static final Logger log = LoggerFactory.getLogger(ZookeeperPoolManager.class);
     
     /** 单例 */
-    private static ZookeeperPoolManager instance;
+    protected static ZookeeperPoolManager instance;
     
     private ObjectPool pool;
     
@@ -33,8 +34,8 @@ public final class ZookeeperPoolManager {
         PoolableObjectFactory factory = new ZookeeperPoolableObjectFactory();
         
         // 初始化ZK对象池
-        int maxIdle = Configuration.getMaxIdle();
-        int initIdleCapacity = Configuration.getInitIdleCapacity();
+        int maxIdle = NumberUtils.toInt(Configuration.MAX_IDLE);
+        int initIdleCapacity = NumberUtils.toInt(Configuration.INIT_IDLE_CAPACITY);
         pool = new StackObjectPool(factory, maxIdle, initIdleCapacity);// 对象构建池
         // 初始化池
         for (int i = 0; i < initIdleCapacity; i++) {
@@ -75,6 +76,10 @@ public final class ZookeeperPoolManager {
     
         if (pool != null) {
             try {
+                if(pool.getNumActive() > 40){
+                    log.warn("超出连接数");
+                    return null;
+                }
                 ZooKeeper zk = (ZooKeeper) pool.borrowObject();
                 if (log.isDebugEnabled()) {
                     log.debug("从Zookeeper连接池中返回连接，zk.sessionId=" + zk.getSessionId());

@@ -17,82 +17,62 @@ import org.slf4j.LoggerFactory;
  * @date Sep 18, 2013 2:04:12 PM
  * @id $Id$
  */
-public final class SessionIdGenerator {
+public class SessionIdGenerator {
     
-    private static SessionIdGenerator instance;
+    protected final static String SESSION_ID_RANDOM_ALGORITHM = "SHA1PRNG";
     
-    private final static String __NEW_SESSION_ID = "tc.sessionid";
+    protected final static String SESSION_ID_RANDOM_ALGORITHM_ALT = "IBMSecureRandom";
     
-    private final static String SESSION_ID_RANDOM_ALGORITHM = "SHA1PRNG";
+    private static Logger log = LoggerFactory.getLogger(SessionIdGenerator.class);
     
-    private final static String SESSION_ID_RANDOM_ALGORITHM_ALT = "IBMSecureRandom";
+    private static Random random;
     
-    private Logger log = LoggerFactory.getLogger(getClass());
+    private static boolean weakRandom;
     
-    private Random random;
-    
-    private boolean weakRandom;
+    private static final Object SEEDOBJECT = new Object();
     
     private SessionIdGenerator() {
     
+    }
+    
+    static {
+        
         if (random == null) {
             try {
                 random = SecureRandom.getInstance(SESSION_ID_RANDOM_ALGORITHM);
+                weakRandom = false;
             } catch (NoSuchAlgorithmException e) {
                 try {
                     random = SecureRandom.getInstance(SESSION_ID_RANDOM_ALGORITHM_ALT);
                     weakRandom = false;
-                } catch (NoSuchAlgorithmException e2) {
-                    log.warn("获取随机数生成器时出错", e);
+                } catch (NoSuchAlgorithmException e_alt) {
+                    log.warn(String.format("==========> Failed in using %s and %s algorithm as random sessionid generator! As an alternative, degrading to java.util.Random.",
+                            SESSION_ID_RANDOM_ALGORITHM, SESSION_ID_RANDOM_ALGORITHM_ALT));
                     random = new Random();
                     weakRandom = true;
                 }
             }
         }
         random.setSeed(random.nextLong() ^ System.currentTimeMillis()
-                ^ hashCode() ^ Runtime.getRuntime().freeMemory());
+                ^ SEEDOBJECT.hashCode() ^ Runtime.getRuntime().freeMemory());
     }
     
-    public static synchronized SessionIdGenerator getInstance() {
+    public static synchronized String newSessionId(HttpServletRequest request) {
     
-        if (instance == null) {
-            instance = new SessionIdGenerator();
-        }
-        return instance;
-    }
-    
-    public synchronized String newSessionId(HttpServletRequest request) {
-    
-        // A requested session ID can only be used if it is in use already.
-        String requestedId = request.getRequestedSessionId();
-        
-        if (requestedId != null) {
-            return requestedId;
-        }
-        
-        // Else reuse any new session ID already defined for this request.
-        String newId = (String) request.getAttribute(__NEW_SESSION_ID);
-        if (newId != null) {
-            return newId;
-        }
-        
         // pick a new unique ID!
         String id = null;
         while (id == null || id.length() == 0) {
-            long r = weakRandom ? (hashCode()
+            long r = weakRandom ? (SEEDOBJECT.hashCode()
                     ^ Runtime.getRuntime().freeMemory() ^ random.nextInt() ^ (((long) request
                     .hashCode()) << 32)) : random.nextLong();
             r ^= System.currentTimeMillis();
-            if (request.getRemoteAddr() != null) {
+            if (request != null && request.getRemoteAddr() != null)
                 r ^= request.getRemoteAddr().hashCode();
-            }
-            if (r < 0) {
+            if (r < 0)
                 r = -r;
-            }
             id = Long.toString(r, 36);
         }
         
-        request.setAttribute(__NEW_SESSION_ID, id);
         return id;
     }
 }

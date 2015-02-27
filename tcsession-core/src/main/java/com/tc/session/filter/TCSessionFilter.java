@@ -6,6 +6,7 @@ import java.io.IOException;
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
+import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
@@ -15,6 +16,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.tc.session.RequestCache;
 import com.tc.session.SessionManager;
 import com.tc.session.servlet.RemotableRequestWrapper;
 
@@ -29,37 +31,47 @@ import com.tc.session.servlet.RemotableRequestWrapper;
  */
 public class TCSessionFilter implements Filter {
     
-    private static final Logger LOG = LoggerFactory.getLogger(TCSessionFilter.class);
+    private static final Logger logger = LoggerFactory.getLogger(TCSessionFilter.class);
     private SessionManager sessionManager;
     
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
     
+        ServletContext sc = filterConfig.getServletContext();
+	    //暂时注释掉
+	    //sc.getSessionCookieConfig().setName(SESSION_NAME);
         try {
             this.sessionManager = (SessionManager) Class.forName("com.tc.session.TCSessionManager").newInstance();
-            this.sessionManager.setServletContext(filterConfig.getServletContext());
-        } catch (ClassNotFoundException e) {
-            LOG.error("过滤器初始化失败", e);
-        } catch (InstantiationException e) {
-            LOG.error("过滤器初始化失败", e);
-        } catch (IllegalAccessException e) {
-            LOG.error("过滤器初始化失败", e);
+        } catch (ClassNotFoundException | IllegalAccessException | InstantiationException e) {
+            logger.error("==========> Error occurs when initializing TCSessionManager. ", e);
+            throw new ServletException(e);
         }
-        
-        if (LOG.isInfoEnabled()){
-            LOG.info("TCSessionFilter.init completed.");
-        }
-            
-        
+        logger.info(">>>>>>>>>>> TCSessionFilter.init completed.");
+        this.sessionManager.setServletContext(sc);
     }
     
     @Override
     public void doFilter(ServletRequest request, ServletResponse response,
             FilterChain chain) throws IOException, ServletException {
     
-        RemotableRequestWrapper req = new RemotableRequestWrapper((HttpServletRequest) request, sessionManager);
-        req.setResponse((HttpServletResponse)response);
-        chain.doFilter(req, response);
+        if (request instanceof HttpServletRequest && response instanceof HttpServletResponse) {
+            
+            HttpServletRequest req = (HttpServletRequest) request;
+            HttpServletResponse resp = (HttpServletResponse) response;
+            
+            RequestCache.begin();
+            try {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(">>>>>>>>>>> Delegating HttpServletRequest with com.tc.session.servlet.RemotableRequestWrapper.");
+                }
+                chain.doFilter(new RemotableRequestWrapper(req, resp, sessionManager), response);
+            } finally {
+                RequestCache.remove();
+            }
+        } else {
+            chain.doFilter(request, response);
+        }
+        
     }
     
     @Override
@@ -68,13 +80,10 @@ public class TCSessionFilter implements Filter {
         if (sessionManager != null) {
             try {
                 sessionManager.close();
+                logger.info(">>>>>>>>>>> TCSessionFilter.destroy completed.");
             } catch (Exception ex) {
-                LOG.error("关闭Session管理器时发生异常，", ex);
+                logger.error("==========> Error occurs when closing TCSessionManager. ", ex);
             }
-        }
-        
-        if (LOG.isInfoEnabled()) {
-            LOG.info("TCSessionFilter.destroy completed.");
         }
     }
 }

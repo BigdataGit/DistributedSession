@@ -1,7 +1,6 @@
 
 package com.tc.session;
 
-import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -24,6 +23,8 @@ public class ZookeeperConnector implements Watcher {
     
     private CountDownLatch signal = new CountDownLatch(1);
     
+    private ZooKeeper zk;
+    
     private static final Logger log = LoggerFactory.getLogger(ZookeeperConnector.class);
 
     /**
@@ -34,20 +35,17 @@ public class ZookeeperConnector implements Watcher {
      * @return
      */
     public ZooKeeper connect(String servers, int sessionTimeout) {
-    
-        ZooKeeper zk;
+        
         try {
             zk = new ZooKeeper(servers, sessionTimeout, this);
-            signal.await(15, TimeUnit.SECONDS);
+            signal.await(1500, TimeUnit.MILLISECONDS);
             if(zk.getState() == ZooKeeper.States.CONNECTED){
                 return zk;
             }else{
                 return null;
             }
-        } catch (IOException e) {
-            log.error("", e);
-        } catch (InterruptedException e) {
-            log.error("", e);
+        } catch (Exception ex){
+            log.error("", ex);
         }
         return null;
     }
@@ -64,5 +62,15 @@ public class ZookeeperConnector implements Watcher {
             signal.countDown();
         }
 
+    }
+    
+    public void close(){
+        if(zk != null){
+            try {
+                zk.close();
+            } catch (InterruptedException e) {
+                log.error("", e);
+            }
+        }
     }
 }

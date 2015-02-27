@@ -1,15 +1,22 @@
 
 package com.tc.session.servlet;
 
+import static com.tc.session.RequestCache.PLACEHOLDER;
+import static com.tc.session.RequestCache.SESSION;
+import static com.tc.session.SessionManager.SESSION_NAME;
+
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.tc.session.RequestCache;
 import com.tc.session.SessionManager;
+import com.tc.session.helper.CookieHelper;
 
 /**
  * 
@@ -22,60 +29,69 @@ import com.tc.session.SessionManager;
  */
 public class RemotableRequestWrapper extends HttpServletRequestWrapper {
     
-    private static Logger log = LoggerFactory.getLogger(RemotableRequestWrapper.class);
+    protected Logger logger = LoggerFactory.getLogger(RemotableRequestWrapper.class);
+    
     private SessionManager sessionManager;
-    private static final String NULL_SESSION = "__NULL_";
+    
+    private HttpServletRequest request;
+    
+    // hold an HttpServletResponse instance in case a new Cookie would be generated & added to user-agent.
     private HttpServletResponse response;
+    
+    private RequestCache cache;
     
     /**
      * 构造方法
      * 
      * @param request
      */
-    public RemotableRequestWrapper(HttpServletRequest request, SessionManager sessionManager) {
+    public RemotableRequestWrapper(HttpServletRequest request, HttpServletResponse response, SessionManager sessionManager) {
     
         super(request);
+        this.request = request;
+        this.response = response;
         this.sessionManager = sessionManager;
+        cache = RequestCache.getFromThread();
     }
     
-    /**
-     * session拦截入口
-     * <p>
-     * 以Request生命周期为粒度进行缓存。更粗粒度的ThreadLocal级别缓存，在某些JavaEE应用服务器的实现上会出问题
-     * 
-     */
+    @Override
+    public String getRequestedSessionId() {
+    
+        String sessionId = cache.get(SESSION_NAME);
+        if (sessionId == null) {
+            sessionId = CookieHelper.findSessionId(this.request);
+            if (StringUtils.isNotBlank(sessionId)) {
+                cache.put(SESSION_NAME, sessionId);
+            }
+        }
+        return sessionId;
+    }
+    
     @Override
     public HttpSession getSession(boolean create) {
     
         if (sessionManager == null) {
-            log.error("SessionManager not initialized...");
-            throw new IllegalStateException("SessionManager not initialized...");
+            throw new IllegalStateException("SessionManager not initialized");
         }
         
-        HttpServletRequest request = (HttpServletRequest) getRequest();
-        Object o = request.getAttribute("tc.thisSession");
-        if (!create && o != null) {
-            return NULL_SESSION.equals(o.toString()) ? null : (HttpSession) o;
+        Object s = cache.get(SESSION);
+        if (!create && s != null) {
+            return s == PLACEHOLDER ? null : (HttpSession) s;
         }
-        
-        String sessionid = sessionManager.getRequestSessionId(request);
+        String sessionid = getRequestedSessionId();
         HttpSession session = null;
         
         if (sessionid != null) {
-            // 如果存在，则先从管理器中取
-            session = sessionManager.getHttpSession(sessionid, request);
+            session = sessionManager.getHttpSession(sessionid);
             if (session == null && !create) {
-                request.setAttribute("tc.thisSession", NULL_SESSION);
+                cache.put(SESSION, PLACEHOLDER);
                 return null;
             }
         }
-        // 否则实例化一个新的Session对象
         if (session == null && create) {
-            session = sessionManager.newHttpSession(request, this.response);
-            request.setAttribute("tc.tsid", session.getId());
+            session = sessionManager.newHttpSession(this.request, this.response);
         }
-        request.setAttribute("tc.thisSession", session == null ? NULL_SESSION : session);
-        
+        cache.put(SESSION, session == null ? PLACEHOLDER : session);
         return session;
     }
     
@@ -85,14 +101,27 @@ public class RemotableRequestWrapper extends HttpServletRequestWrapper {
         return getSession(true);
     }
     
-    public HttpServletResponse getResponse() {
+    @Override
+    public boolean isRequestedSessionIdValid() {
     
-        return response;
+        return getSession(false) != null;
     }
     
-    public void setResponse(HttpServletResponse response) {
+    @Override
+    public boolean isRequestedSessionIdFromCookie() {
     
-        this.response = response;
+        return true;
     }
     
+    @Override
+    public boolean isRequestedSessionIdFromURL() {
+    
+        return false;
+    }
+    
+    @Override
+    public boolean isRequestedSessionIdFromUrl() {
+    
+        return isRequestedSessionIdFromURL();
+    }
 }

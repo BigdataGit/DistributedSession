@@ -2,16 +2,16 @@
 package com.tc.session.zookeeper;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.commons.lang3.math.NumberUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.tc.session.Configuration;
 import com.tc.session.SessionClient;
-import com.tc.session.SessionMetaData;
+import com.tc.session.TCSession;
 
 /**
  * 
@@ -25,17 +25,17 @@ public class TimeoutCheckTask implements Callable<Boolean> {
     
     private static final Logger log = LoggerFactory.getLogger(TimeoutCheckTask.class);
     
-    private int sleepTime;
+    private static long SLEEP_TIMEOUT;
     private SessionClient client;
     
     public TimeoutCheckTask() {
     
-        sleepTime = Configuration.getTimeoutCheckInteval();
+        SLEEP_TIMEOUT = NumberUtils.toInt(Configuration.TIMEOUT_CHECK_INTERVAL);
         client = ZookeeperSessionClient.getInstance();
     }
     
     @Override
-    public Boolean call() throws InterruptedException {
+    public Boolean call() throws Exception {
     
         while (true) {
             try {
@@ -44,25 +44,20 @@ public class TimeoutCheckTask implements Callable<Boolean> {
                     continue;
                 }
                 for (String sessionId : sessionIds) {
-                    SessionMetaData metadata = client.getSession(sessionId);
-                    if (metadata == null) {
+                    TCSession session = client.getSession(sessionId);
+                    if (session == null)
                         continue;
-                    }
-                    if (!metadata.isValid()) {
-                        Map<String, Object> map = client.removeSession(sessionId);
-                        if (map == null) {
-                            log.warn("Failed to remove session node: " + sessionId);
-                        } else {
-                            if (log.isInfoEnabled()) {
-                                log.info("Removed session node: " + sessionId + " successfully.");
-                            }
+                    if (!session.isValid()) {
+                        if (log.isDebugEnabled()) {
+                            log.debug(">>>>>>>>>>> Try removing expired session: " + session);
                         }
+                        session.invalidate();
                     }
                 }
             } catch (Exception ex) {
-                log.error("Session超时定时任务发生异常，", ex);
+                log.error("==========> Error occurs in TimeoutCheckTask: ", ex);
             } finally {
-                TimeUnit.SECONDS.sleep(sleepTime);
+                TimeUnit.SECONDS.sleep(SLEEP_TIMEOUT);
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.tc.session;
 
+import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.commons.pool.PoolableObjectFactory;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.ZooKeeper.States;
@@ -18,13 +19,13 @@ public class ZookeeperPoolableObjectFactory implements PoolableObjectFactory {
     private static final Logger log = LoggerFactory.getLogger(ZookeeperPoolableObjectFactory.class);
 
 
-    public ZooKeeper makeObject()  {
+    public ZooKeeper makeObject() throws Exception {
         //返回一个新的zk实例
         ZookeeperConnector cw = new ZookeeperConnector();
 
         //连接服务端
-        String servers = Configuration.getServers();
-        int timeout = Configuration.getConnectionTimeout() * 1000;
+        String servers = Configuration.SERVERS;
+        int timeout = NumberUtils.toInt(Configuration.CONNECTION_TIMEOUT) * 1000;
         ZooKeeper zk = cw.connect(servers, timeout);
         if (zk != null) {
             if (log.isInfoEnabled()) {
@@ -33,12 +34,13 @@ public class ZookeeperPoolableObjectFactory implements PoolableObjectFactory {
             return zk;
         } else {
             log.warn("实例化Zookeeper客户端对象失败");
-            throw new IllegalStateException("Error in creating connection to ZooKeeper Server: " + servers);
+            cw.close();
+            throw new Exception("Error in creating connection to ZooKeeper Server: " + servers);
         }
     }
 
 
-    public void destroyObject(ZooKeeper obj) throws InterruptedException {
+    public void destroyObject(ZooKeeper obj) throws Exception {
         if (obj != null) {
             obj.close();
             if (log.isInfoEnabled()) {
@@ -47,7 +49,7 @@ public class ZookeeperPoolableObjectFactory implements PoolableObjectFactory {
         }
     }
     @Override
-	public void destroyObject(Object obj) throws InterruptedException {
+	public void destroyObject(Object obj) throws Exception {
 		destroyObject((ZooKeeper)obj);
 	}
 
@@ -72,11 +74,11 @@ public class ZookeeperPoolableObjectFactory implements PoolableObjectFactory {
 
 
 	@Override
-	public void activateObject(Object obj) {
+	public void activateObject(Object obj) throws Exception {
 	}
 
 	@Override
-	public void passivateObject(Object obj) {
+	public void passivateObject(Object obj) throws Exception {
 	}
 }
 

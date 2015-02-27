@@ -17,7 +17,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.tc.session.SessionClient;
-import com.tc.session.SessionMetaData;
+import com.tc.session.TCSession;
+import com.tc.session.TCSession.SessionMetaData;
 import com.tc.session.ZookeeperPoolManager;
 
 /**
@@ -28,7 +29,7 @@ import com.tc.session.ZookeeperPoolManager;
  * @date Sep 13, 2013 9:17:40 AM
  * @id $Id$
  */
-public final class ZookeeperSessionClient implements SessionClient {
+public class ZookeeperSessionClient implements SessionClient {
     
     /** ZK组节点名称 */
     public static final String GROUP_NAME = "/TC_SESSIONS";
@@ -71,8 +72,9 @@ public final class ZookeeperSessionClient implements SessionClient {
      * {@inheritDoc}
      */
     @Override
-    public SessionMetaData getSession(String sessionid) {
+    public TCSession getSession(String sessionid) {
     
+        log.debug(">>> Try to get sessionid: " + sessionid);
         ZooKeeper zookeeper = pool.borrowObject();
         if (zookeeper == null) {
             log.error("从连接池中获取连接时，发生错误");
@@ -84,17 +86,18 @@ public final class ZookeeperSessionClient implements SessionClient {
         try {
             data = zookeeper.getData(path, false, null);
             if (data == null) {
+                log.debug(">>> Failed to get sessionid: " + sessionid);
                 return null;
             }
             Object obj = SerializationUtils.deserialize(data);
             if (!(obj instanceof SessionMetaData)) {
                 return null;
             }
-            return (SessionMetaData) obj;
+            SessionMetaData metadata = (SessionMetaData) obj;
+            return new TCSession(this, metadata, false);
         } catch (KeeperException e) {
-            if (e.code() != Code.NONODE){ // session可能被定期清理了，属于正常的业务情况
+            if (e.code() != Code.NONODE) // session可能被定期清理了，属于正常的业务情况
                 log.error("Error in fetching session from ZooKeeper Server. id: " + sessionid, e);
-            }
         } catch (InterruptedException e) {
             log.error("Error in fetching session from ZooKeeper Server. id: " + sessionid, e);
         } finally {
@@ -107,8 +110,9 @@ public final class ZookeeperSessionClient implements SessionClient {
      * {@inheritDoc}
      */
     @Override
-    public boolean updateSession(SessionMetaData metadata) {
+    public boolean updateSession(TCSession session) {
     
+        SessionMetaData metadata = session.getSessionMetadata();
         ZooKeeper zookeeper = pool.borrowObject();
         if (zookeeper == null) {
             log.error("从连接池中获取连接时，发生错误");
@@ -116,17 +120,18 @@ public final class ZookeeperSessionClient implements SessionClient {
         }
         
         try {
+            // //设置当前版本号
+            // metadata.setVersion(stat.getVersion());
             String path = GROUP_NAME + NODE_SEP + metadata.getId();
-            metadata.setLastAccessTime(System.currentTimeMillis());
+            metadata.setLastAccessedTime(System.currentTimeMillis());
             zookeeper.setData(path, SerializationUtils.serialize(metadata), -1);
             if (log.isDebugEnabled()) {
                 log.debug("更新Session节点的元数据完成[" + path + "]");
             }
             return true;
         } catch (KeeperException e) {
-            if (e.code() != Code.NONODE){ // session可能被定期清理了，属于正常的业务情况
+            if (e.code() != Code.NONODE) // session可能被定期清理了，属于正常的业务情况
                 log.error("Error in fetching session from ZooKeeper Server. id: " + metadata.getId(), e);
-            }
         } catch (InterruptedException e) {
             log.error("Error in fetching session from ZooKeeper Server. id: " + metadata.getId(), e);
         } finally {
@@ -141,8 +146,9 @@ public final class ZookeeperSessionClient implements SessionClient {
      * 如果metadata不为空，建立对应的session节点。如果为空，则建立根节点
      */
     @Override
-    public boolean createSession(SessionMetaData metadata) {
+    public boolean createSession(TCSession session) {
     
+        SessionMetaData metadata = session.getSessionMetadata();
         ZooKeeper zookeeper = pool.borrowObject();
         if (zookeeper == null) {
             log.error("从连接池中获取连接时，发生错误");
@@ -160,9 +166,8 @@ public final class ZookeeperSessionClient implements SessionClient {
             }
             createPath = zookeeper.create(path, arrData, Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
         } catch (KeeperException e) {
-            if (e.code() != Code.NODEEXISTS){
+            if (e.code() != Code.NODEEXISTS)
                 log.error("Error in creating session, node already exists. metadata: " + metadata, e);
-            }
             return false;
         } catch (InterruptedException e) {
             log.error("Error in creating session. metadata: " + metadata, e);
@@ -191,16 +196,15 @@ public final class ZookeeperSessionClient implements SessionClient {
         String path = GROUP_NAME + NODE_SEP + sessionid + NODE_SEP + key;
         try {
             byte[] arrData = SerializationUtils.serialize(value);
-            //先检查节点是否存在
+            // 先检查节点是否存在
             Stat stat = zookeeper.exists(path, false);
-            if(stat == null){//若节点还不存在，先创建节点——Zookeeper不允许直接对一个不存在的节点进行setData操作
+            if (stat == null) {// 若节点还不存在，先创建节点——Zookeeper不允许直接对一个不存在的节点进行setData操作
                 zookeeper.create(path, null, Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
             }
             zookeeper.setData(path, arrData, -1);
         } catch (KeeperException e) {
-            if (e.code() != Code.NODEEXISTS){
+            if (e.code() != Code.NODEEXISTS)
                 log.error("Error in setting attribute: sessionid " + sessionid + " key: " + key + " value: " + value, e);
-            }
             return false;
         } catch (InterruptedException e) {
             log.error("Error in setting attribute: sessionid " + sessionid + " key: " + key + " value: " + value, e);
@@ -295,8 +299,8 @@ public final class ZookeeperSessionClient implements SessionClient {
         String path = GROUP_NAME + NODE_SEP + sessionid;
         
         try {
-            SessionMetaData metadata = this.getSession(sessionid);
-            if (metadata == null || !metadata.isValid()) {
+            TCSession session = this.getSession(sessionid);
+            if (session == null || !session.isValid()) {
                 return null;
             }
             return zookeeper.getChildren(path, false);
@@ -332,15 +336,15 @@ public final class ZookeeperSessionClient implements SessionClient {
                     String dataPath = path + NODE_SEP + node;
                     // 获取数据
                     byte[] data = zookeeper.getData(dataPath, false, null);
-                    try{
+                    try {
                         if (data != null) {
                             Object value = SerializationUtils.deserialize(data);
                             datas.put(node, value);
                         }
-                    }catch(Exception ex){
+                    } catch (Exception ex) {
                         log.warn("Error in deserializing.");
                     }
-
+                    
                     zookeeper.delete(dataPath, -1);
                 }
             }
@@ -364,12 +368,12 @@ public final class ZookeeperSessionClient implements SessionClient {
         return datas;
     }
     
-    /** 
+    /**
      * {@inheritDoc}
      */
     @Override
     public List<String> getSessions() {
-        
+    
         ZooKeeper zookeeper = pool.borrowObject();
         if (zookeeper == null) {
             log.error("从连接池中获取连接时，发生错误");
@@ -389,6 +393,5 @@ public final class ZookeeperSessionClient implements SessionClient {
             pool.returnObject(zookeeper);
         }
     }
-
     
 }
