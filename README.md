@@ -1,6 +1,6 @@
-DistributedSession
-==================
+一个简单的分布式Session实现
+==========================
 
-Simple session implementation for working in distributed environment.
+解决分布式环境下，Session集中式持久化及访问的问题
 
 new version 2.0
